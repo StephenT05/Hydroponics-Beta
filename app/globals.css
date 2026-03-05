@@ -76,3 +76,35 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+.tank-water {
+  background: rgb(14 165 233 / 75%);
+}
+
+.tank-sine-wave {
+  position: absolute;
+  top: -12px;
+  left: -100%;
+  width: 300%;
+  height: 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cpath d='M0 12 C15 2 45 22 60 12 C75 2 105 22 120 12 C135 2 165 22 180 12 C195 2 225 22 240 12 L240 24 L0 24 Z' fill='%230289c7'/%3E%3C/svg%3E");
+  background-size: 240px 24px;
+  background-repeat: repeat-x;
+  opacity: 0.95;
+  animation: tank-sine-slide 1.15s linear infinite;
+}
+
+@keyframes tank-sine-slide {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    background-position-x: 240px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tank-sine-wave {
+    animation: none;
+  }
+}
