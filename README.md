@@ -1,69 +1,167 @@
-![Next.js with MongoDB](./public/og.png)
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 
--> View demo: [nextjs.mongodb.com](https://nextjs.mongodb.com/?utm_campaign=devrel&utm_source=third-party-content&utm_medium=cta&utm_content=template-nextjs-mongodb&utm_term=jesse.hall)
+// --- Configuration ---
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* serverPath = "http://192.168.1.XX:3000/api/water-level";
+const unsigned long sampleIntervalMs = 10000;
+const uint16_t httpTimeoutMs = 8000;
+const uint8_t httpRetries = 3;
 
-# Next.js with MongoDB
+// --- Pins ---
+const int pwrPin = 14;        // D5: Power for Analog Sensor
+const int waterLevelPin = A0; // Signal wire from Analog Sensor
+const int trigPin = 5;        // D1: Ultrasonic Trig
+const int echoPin = 4;        // D2: Ultrasonic Echo
 
-A minimal template for building full-stack React applications using Next.js, Vercel, and MongoDB.
+// --- Kalman Filter Variables ---
+float kalmanDistance = 0; 
+float kalmanAnalog = 0;
+float pc = 0.0;
+float g = 0.0;
+float p = 1.0;
+float q = 0.1; // Process noise (lower = smoother/slower)
+float r = 0.1; // Measurement noise (higher = trusts old data more)
+float lastKalmanDistance = 0;
+unsigned long lastSampleMs = 0;
 
-## Getting Started
+// Kalman function
+float updateKalman(float measurement, float lastEstimate) {
+  pc = p + q;
+  g = pc / (pc + r);
+  p = (1 - g) * pc;
+  return g * measurement + (1 - g) * lastEstimate;
+}
 
-Click the "Deploy" button to clone this repo, create a new Vercel project, setup the MongoDB integration, and provision a new MongoDB database:
+void ensureWiFiConnected() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?demo-description=Minimal%20template%20for%20building%20full-stack%20React%20applications%20using%20Next.js%2C%20Vercel%2C%20and%20MongoDB.&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2F4N50YqRe7FHsd0ysfGM8bC%2F1201fe6929b842ec3ee15ee036625471%2Fog.png&demo-title=MongoDB%20%26%20Next.js%20Starter%20Template%20&demo-url=https%3A%2F%2Fnextjs.mongodb.com%2F&products=%255B%257B%2522type%2522%253A%2522integration%2522%252C%2522protocol%2522%253A%2522storage%2522%252C%2522productSlug%2522%253A%2522atlas%2522%252C%2522integrationSlug%2522%253A%2522mongodbatlas%2522%257D%255D&project-name=MongoDB%20%26%20Next.js%20Starter%20Template%20&repository-name=mongo-db-and-next-js-starter-template&repository-url=https%3A%2F%2Fgithub.com%2Fmongodb-developer%2Fnextjs-template-mongodb&root-directories=List%20of%20directory%20paths%20for%20the%20directories%20to%20clone%20into%20projects&skippable-integrations=1)
+  Serial.println("WiFi disconnected, reconnecting...");
+  WiFi.disconnect();
+  WiFi.begin(ssid, password);
 
-## Local Setup
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
 
-### Installation
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("\nWiFi reconnected, IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nWiFi reconnect failed");
+  }
+}
 
-Install the dependencies:
+int calculatePercentage(float filteredAnalog) {
+  // ESP8266 A0 is usually 0-1023; clamp to avoid invalid payload values.
+  int clamped = constrain((int)filteredAnalog, 0, 1023);
+  return map(clamped, 0, 1023, 0, 100);
+}
 
-```bash
-npm install
-```
+bool postWithRetry(const String& jsonPayload) {
+  for (uint8_t attempt = 1; attempt <= httpRetries; attempt++) {
+    ensureWiFiConnected();
+    if (WiFi.status() != WL_CONNECTED) {
+      delay(400);
+      continue;
+    }
 
-### Development
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(httpTimeoutMs);
+    http.begin(client, serverPath);
+    http.addHeader("Content-Type", "application/json");
 
-#### Create a .env file in the project root
+    int httpResponseCode = http.POST(jsonPayload);
+    http.end();
 
-```bash
-cp .env.example .env
-```
+    if (httpResponseCode > 0 && httpResponseCode < 400) {
+      Serial.println("Upload OK (attempt " + String(attempt) + "): " + String(httpResponseCode));
+      return true;
+    }
 
-#### Get your database URL
+    Serial.println("Upload failed (attempt " + String(attempt) + "): " + String(httpResponseCode));
+    delay(500);
+  }
 
-Obtain the database connection string from the Cluster tab on the [MongoDB Atlas Dashboard](https://account.mongodb.com/account/login/?utm_campaign=devrel&utm_source=third-party-content&utm_medium=cta&utm_content=template-nextjs-mongodb&utm_term=jesse.hall).
+  return false;
+}
 
-#### Add the database URL to the .env file
+void setup() {
+  Serial.begin(115200);
+  pinMode(pwrPin, OUTPUT);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  digitalWrite(pwrPin, LOW);
 
-Update the `.env` file with your database connection string:
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print("\nWiFi Connected, IP: ");
+  Serial.println(WiFi.localIP());
+}
 
-```txt
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/<database>?retryWrites=true&w=majority
-```
+void loop() {
+  if (millis() - lastSampleMs < sampleIntervalMs) {
+    delay(10);
+    return;
+  }
+  lastSampleMs = millis();
 
-#### Start the development server
+  ensureWiFiConnected();
 
-```bash
-npm run dev
-```
+  // 1. Read Raw Data
+  digitalWrite(pwrPin, HIGH);
+  delay(10);
+  int rawAnalog = analogRead(waterLevelPin);
+  digitalWrite(pwrPin, LOW);
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  float rawDistance = duration * 0.034 / 2;
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+  // 2. Apply Kalman Filter
+  // If it's the first run, initialize the filter with the raw value
+  if (kalmanDistance == 0) {
+    kalmanDistance = rawDistance;
+  }
+  if (kalmanAnalog == 0) {
+    kalmanAnalog = (float)rawAnalog;
+  }
 
-## Learn More
+  kalmanDistance = updateKalman(rawDistance, kalmanDistance);
+  kalmanAnalog = updateKalman((float)rawAnalog, kalmanAnalog);
 
-To learn more about MongoDB, check out the MongoDB documentation:
+  int percentage = calculatePercentage(kalmanAnalog);
+  bool isFilling = (lastKalmanDistance > 0) ? (kalmanDistance < lastKalmanDistance - 0.2) : false;
+  lastKalmanDistance = kalmanDistance;
+  int rssi = WiFi.RSSI();
 
-- [MongoDB Documentation](https://www.mongodb.com/docs/?utm_campaign=devrel&utm_source=third-party-content&utm_medium=cta&utm_content=template-nextjs-mongodb&utm_term=jesse.hall) - learn about MongoDB features and APIs
-- [MongoDB Node.js Driver](https://www.mongodb.com/docs/drivers/node/current/?utm_campaign=devrel&utm_source=third-party-content&utm_medium=cta&utm_content=template-nextjs-mongodb&utm_term=jesse.hall) - documentation for the official Node.js driver
+  // 3. Send Filtered Data
+  String jsonPayload = "{\"percentage\":" + String(percentage) +
+                       ",\"raw_distance\":" + String(rawDistance, 2) +
+                       ",\"is_filling\":" + String(isFilling ? "true" : "false") +
+                       ",\"rssi\":" + String(rssi) + "}";
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial
-
-## Deploy on Vercel
-
-Commit and push your code changes to your GitHub repository to automatically trigger a new deployment.
+  bool ok = postWithRetry(jsonPayload);
+  if (ok) {
+    Serial.println("Payload sent: " + jsonPayload);
+  } else {
+    Serial.println("Payload dropped after retries: " + jsonPayload);
+  }
+}
