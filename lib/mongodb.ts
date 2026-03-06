@@ -1,10 +1,8 @@
 import { MongoClient, MongoClientOptions } from 'mongodb';
 
 const uri = process.env.MONGODB_URI;
-const dbName = process.env.MONGODB_DB;
 const options: MongoClientOptions = {
   appName: "devrel.nextjs.starter",
-  dbName,
 };
 
 let client: MongoClient;

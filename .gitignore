@@ -1,2 +1,19 @@
-.env 
-node_modules
+# Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dependencies
+node_modules/
+/npm-debug.log*
+
+# Next.js Build Output
+.next/
+out/
+build/
+
+# Hardware / IDE files
+.vscode/
+.DS_Store
