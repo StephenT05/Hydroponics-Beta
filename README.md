@@ -1,8 +1,4 @@
-![Next.js with MongoDB](./public/og.png)
-
--> View demo: [nextjs.mongodb.com](https://nextjs.mongodb.com/?utm_campaign=devrel&utm_source=third-party-content&utm_medium=cta&utm_content=template-nextjs-mongodb&utm_term=jesse.hall)
-
-#Internet Accessible Hydroponic Sensors
+# Internet Accessible Hydroponic Sensors
 
 ## Next.js with MongoDB
 
