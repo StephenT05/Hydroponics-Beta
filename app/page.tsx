@@ -77,7 +77,7 @@ export default async function Home() {
             </section>
           </main>
 
-          <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[#023430] py-5 sm:gap-2 sm:gap-6 md:pb-12 md:pt-10 dark:border-[#023430]">
+          <footer className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[#023430] py-5 sm:gap-2 sm:gap-6 md:pb-12 md:pt-10 dark:border-[#023430]">
             <Badge
               variant={result === "Database connected" ? "default" : "destructive"}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
