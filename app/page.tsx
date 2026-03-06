@@ -35,7 +35,7 @@ export default async function Home() {
   const isFilling = Boolean(latestWaterLevel?.is_filling);
 
   return (
-    <div className="bg-neutral-100 dark:bg-neutral-950 dark:bg-[url('https://www.transparenttextures.com/patterns/cartographer.png')] dark:bg-repeat flex min-h-screen flex-col justify-center">
+    <div className="bg-neutral-100 dark:bg-neutral-950 dark:bg-[url('https://www.transparenttextures.com/patterns/cartographer.png')] dark:bg-repeat flex min-h-screen flex-col justify-center m-5">
       <div className="relative z-10 mx-auto flex w-full max-w-full md:max-w-md flex-1 flex-col sm:p-3 sm:px-5 md:px-0 lg:max-w-xl bg-white dark:bg-black/30 border-2 border-blue-600 dark:border-transparent shadow-2xl">
          
           <main className="flex flex-1 flex-col mt-10">
