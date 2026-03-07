@@ -16,6 +16,7 @@ const waterLevelSchema = new Schema(
     },
 
     // Metadata for the "Triple Filter" / Debugging
+    raw_analog: Number,
     raw_distance: Number, // Raw inches from sensor before Kalman
     is_filling: {
       type: Boolean,

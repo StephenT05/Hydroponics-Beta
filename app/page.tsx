@@ -2,7 +2,7 @@ import { dbConnectionStatus } from "@/db/connection-status";
 import { Badge } from "@/components/ui/badge";
 import { connectToDatabase } from "@/lib/mongoose";
 import WaterLevel from "@/models/WaterLevel";
-import WaterTankAnimation from "@/components/WaterTankAnimation";
+import LiveWaterLevelSection from "@/components/LiveWaterLevelSection";
 
 type WaterLevelView = {
   percentage?: number;
@@ -10,8 +10,26 @@ type WaterLevelView = {
   raw_distance?: number;
   is_filling?: boolean;
   rssi?: number;
-  timestamp?: Date | string;
+  timestamp?: string;
 };
+
+const DEVICE_ACTIVE_WINDOW_SEC = Number(process.env.DEVICE_ACTIVE_WINDOW_SEC ?? 45);
+
+function toPlainWaterLevel(input: unknown): WaterLevelView | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const raw = input as Record<string, unknown>;
+  return {
+    percentage: Number(raw.percentage ?? 0),
+    gallons: Number(raw.gallons ?? 0),
+    raw_distance: Number(raw.raw_distance ?? 0),
+    is_filling: Boolean(raw.is_filling),
+    rssi: Number(raw.rssi ?? 0),
+    timestamp: raw.timestamp ? new Date(String(raw.timestamp)).toISOString() : undefined,
+  };
+}
 
 const DATA = {
   title: "Hydroponics Water Monitor",
@@ -22,17 +40,15 @@ const DATA = {
 export default async function Home() {
   const result = await dbConnectionStatus();
   await connectToDatabase();
-  const latestWaterLevel = (await WaterLevel.findOne().sort({ timestamp: -1 }).lean()) as
-    | WaterLevelView
-    | null;
+  const latestRaw = await WaterLevel.findOne().sort({ timestamp: -1 }).lean();
+  const latestWaterLevel = toPlainWaterLevel(latestRaw);
 
-  const latestTimestamp = latestWaterLevel?.timestamp
-    ? new Date(latestWaterLevel.timestamp).toLocaleString()
-    : "No readings yet";
-
-  const percentage = Number(latestWaterLevel?.percentage ?? 0);
-  const gallons = Number(latestWaterLevel?.gallons ?? 0);
-  const isFilling = Boolean(latestWaterLevel?.is_filling);
+  const lastSeenMs = latestWaterLevel?.timestamp
+    ? new Date(latestWaterLevel.timestamp).getTime()
+    : 0;
+  const isDeviceActive =
+    Number.isFinite(lastSeenMs) &&
+    Date.now() - lastSeenMs <= DEVICE_ACTIVE_WINDOW_SEC * 1000;
 
   return (
     <div className="bg-neutral-100 dark:bg-neutral-950 dark:bg-[url('https://www.transparenttextures.com/patterns/cartographer.png')] dark:bg-repeat flex min-h-screen flex-col justify-center">
@@ -46,35 +62,10 @@ export default async function Home() {
               {DATA.description}
             </p>
 
-            <WaterTankAnimation
-              percentage={percentage}
-              gallons={gallons}
-              isFilling={isFilling}
+            <LiveWaterLevelSection
+              initialWaterLevel={latestWaterLevel}
+              wsEnabled={isDeviceActive}
             />
-
-            <section className="mt-8 rounded-xl border border-[#023430]/20 bg-[#001E2B]/5 p-4 dark:border-[#00ED64]/20 dark:bg-[#00ED64]/5">
-              <h2 className="text-lg font-semibold tracking-tight">Latest Water Level</h2>
-              <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:text-base">
-                <p>
-                  Percentage: <span className="font-semibold">{latestWaterLevel?.percentage ?? "-"}%</span>
-                </p>
-                <p>
-                  Gallons: <span className="font-semibold">{latestWaterLevel?.gallons ?? "-"}</span>
-                </p>
-                <p>
-                  Raw Distance: <span className="font-semibold">{latestWaterLevel?.raw_distance ?? "-"}</span>
-                </p>
-                <p>
-                  RSSI: <span className="font-semibold">{latestWaterLevel?.rssi ?? "-"} dBm</span>
-                </p>
-                <p>
-                  Filling: <span className="font-semibold">{latestWaterLevel?.is_filling ? "Yes" : "No"}</span>
-                </p>
-                <p>
-                  Timestamp: <span className="font-semibold">{latestTimestamp}</span>
-                </p>
-              </div>
-            </section>
           </main>
 
           <footer className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[#023430] py-5 sm:gap-2 sm:gap-6 md:pb-12 md:pt-10 dark:border-[#023430]">

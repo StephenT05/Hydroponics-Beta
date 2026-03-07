@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/mongoose";
 import WaterLevel from "@/models/WaterLevel";
+import { broadcastWaterLevel } from "@/lib/ws-server";
+
+export const runtime = "nodejs";
+
+const TANK_CAPACITY_GAL = Number(process.env.WATER_TANK_CAPACITY_GAL ?? 5.0);
+const FULL_DISTANCE_IN = Number(process.env.WATER_FULL_DISTANCE_IN ?? 4.0);
+const EMPTY_DISTANCE_IN = Number(process.env.WATER_EMPTY_DISTANCE_IN ?? 20.0);
+const FLOW_ACTIVE_HIGH = process.env.WATER_FLOW_ACTIVE_HIGH !== "false";
+const FLOW_ON_THRESHOLD = Number(process.env.WATER_FLOW_ON_THRESHOLD ?? 120);
+const FLOW_OFF_THRESHOLD = Number(process.env.WATER_FLOW_OFF_THRESHOLD ?? 80);
 
 async function ensureWaterLevelCollection() {
   try {
@@ -14,13 +24,39 @@ async function ensureWaterLevelCollection() {
   }
 }
 
-function calculateGallons(percentage: number) {
-  const tankCapacityGallons = Number(process.env.WATER_TANK_CAPACITY_GALLONS ?? 5);
-  if (!Number.isFinite(tankCapacityGallons) || tankCapacityGallons <= 0) {
-    return 0;
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function calculateFromDistance(rawDistance: number) {
+  const range = EMPTY_DISTANCE_IN - FULL_DISTANCE_IN;
+  if (!Number.isFinite(rawDistance) || !Number.isFinite(range) || range <= 0 || TANK_CAPACITY_GAL <= 0) {
+    return { percentage: 0, gallons: 0 };
   }
-  const normalizedPercent = Math.min(Math.max(percentage, 0), 100);
-  return Number(((normalizedPercent / 100) * tankCapacityGallons).toFixed(3));
+
+  // Calibration mapping: FULL_DISTANCE_IN -> 100%, EMPTY_DISTANCE_IN -> 0%.
+  const normalized = clamp((EMPTY_DISTANCE_IN - rawDistance) / range, 0, 1);
+  const percentage = Number((normalized * 100).toFixed(2));
+  const gallons = Number((normalized * TANK_CAPACITY_GAL).toFixed(2));
+
+  return { percentage, gallons };
+}
+
+function resolveFillingFromAnalog(rawAnalog: number, previousIsFilling: boolean) {
+  if (!Number.isFinite(rawAnalog)) {
+    return false;
+  }
+
+  // Hysteresis avoids flicker/noise when analog values hover near the threshold.
+  if (FLOW_ACTIVE_HIGH) {
+    return previousIsFilling
+      ? rawAnalog >= FLOW_OFF_THRESHOLD
+      : rawAnalog >= FLOW_ON_THRESHOLD;
+  }
+
+  return previousIsFilling
+    ? rawAnalog <= FLOW_OFF_THRESHOLD
+    : rawAnalog <= FLOW_ON_THRESHOLD;
 }
 
 export async function GET() {
@@ -49,13 +85,19 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const percentage = Number(body?.percentage);
+    const rawAnalog = Number(body?.raw_analog);
+    const rawDistance = Number(body?.raw_dist ?? body?.raw_distance);
+    const sentValue = Number(body?.value);
+    const sentPercentage = Number(body?.percentage);
+    const hasRawDistance = Number.isFinite(rawDistance);
+    const hasPercentage = Number.isFinite(sentPercentage) && sentPercentage >= 0;
+    const hasValue = Number.isFinite(sentValue) && sentValue >= 0;
 
-    if (!Number.isFinite(percentage) || percentage < 0) {
+    if (!hasRawDistance && !hasPercentage && !hasValue) {
       return NextResponse.json(
         {
           ok: false,
-          error: "`percentage` must be a number >= 0",
+          error: "Provide `raw_dist`/`raw_distance` or `value`/`percentage`",
         },
         { status: 400 },
       );
@@ -64,24 +106,54 @@ export async function POST(request: NextRequest) {
     await connectToDatabase();
     await ensureWaterLevelCollection();
 
+    const previous = await WaterLevel.findOne().sort({ timestamp: -1 }).lean();
+
+    const derivedFromDistance = hasRawDistance
+      ? calculateFromDistance(rawDistance)
+      : null;
+
+    const percentage = derivedFromDistance
+      ? derivedFromDistance.percentage
+      : hasValue
+        ? Number(sentValue.toFixed(2))
+      : Number(sentPercentage.toFixed(2));
+
     const gallons =
       body?.gallons !== undefined && Number.isFinite(Number(body.gallons))
         ? Number(body.gallons)
-        : calculateGallons(percentage);
+        : derivedFromDistance
+          ? derivedFromDistance.gallons
+          : 0;
+
+    // Filling state is determined only by the dedicated flow sensor on A0.
+    const isFilling = resolveFillingFromAnalog(rawAnalog, Boolean(previous?.is_filling));
 
     const created = await WaterLevel.create({
       percentage,
       gallons,
       raw_distance:
-        body?.raw_distance !== undefined && Number.isFinite(Number(body.raw_distance))
-          ? Number(body.raw_distance)
+        hasRawDistance
+          ? rawDistance
           : undefined,
-      is_filling: Boolean(body?.is_filling),
+      is_filling: isFilling,
+      raw_analog:
+        Number.isFinite(rawAnalog)
+          ? rawAnalog
+          : undefined,
       rssi: body?.rssi !== undefined && Number.isFinite(Number(body.rssi)) ? Number(body.rssi) : undefined,
       timestamp:
         body?.timestamp && !Number.isNaN(new Date(body.timestamp).getTime())
           ? new Date(body.timestamp)
           : undefined,
+    });
+
+    broadcastWaterLevel({
+      percentage: created.percentage,
+      gallons: created.gallons,
+      raw_distance: created.raw_distance,
+      is_filling: created.is_filling,
+      rssi: created.rssi,
+      timestamp: created.timestamp,
     });
 
     return NextResponse.json(
